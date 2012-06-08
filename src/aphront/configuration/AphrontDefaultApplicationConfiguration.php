@@ -250,6 +250,8 @@ class AphrontDefaultApplicationConfiguration
           'diff/'                       => 'DiffusionDiffController',
           'tags/(?P<dblob>.*)'          => 'DiffusionTagListController',
           'branches/(?P<dblob>.*)'      => 'DiffusionBranchTableController',
+          'compare/((?P<commitprev>.*)/(?P<commit>.*))?'
+            => 'DiffusionCompareController',
         ),
         'inline/(?P<phid>[^/]+)/' => 'DiffusionInlineCommentController',
         'services/' => array(

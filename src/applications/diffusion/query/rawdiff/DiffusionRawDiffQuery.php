@@ -19,12 +19,14 @@
 abstract class DiffusionRawDiffQuery extends DiffusionQuery {
 
   private $request;
+  private $prevRequest;
   private $timeout;
   private $linesOfContext = 65535;
 
   final public static function newFromDiffusionRequest(
-    DiffusionRequest $request) {
-    return parent::newQueryObject(__CLASS__, $request);
+    DiffusionRequest $request,
+    DiffusionRequest $prev_request = null) {
+    return parent::newQueryObject(__CLASS__, $request, $prev_request);
   }
 
   final public function loadRawDiff() {
