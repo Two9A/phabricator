@@ -18,6 +18,8 @@
 
 final class DiffusionCompareController extends DiffusionController {
 
+  const CHANGES_LIMIT = 100;
+
   private $diffusionRequestPrev = null;
 
   public function willProcessRequest(array $data) {
@@ -128,6 +130,158 @@ final class DiffusionCompareController extends DiffusionController {
 
     // TODO: Work out a PathChangeQuery across all the commits
     // between commit and commit_prev. For now, display nothing.
+    $change_query = DiffusionPathChangeQuery::newFromDiffusionRequest(
+      $drequest, $drequest_prev);
+    $changes = $change_query->loadChanges();
+
+    //$content[] = $this->buildMergesTable($commit);
+
+    $original_changes_count = count($changes);
+    if ($request->getStr('show_all') !== 'true' &&
+        $original_changes_count > self::CHANGES_LIMIT) {
+      $changes = array_slice($changes, 0, self::CHANGES_LIMIT);
+    }
+
+    $change_table = new DiffusionCommitChangeTableView();
+    $change_table->setDiffusionRequest($drequest);
+    $change_table->setPathChanges($changes);
+
+    $count = count($changes);
+
+    $bad_commit = null;
+    if ($count == 0) {
+      $bad_commit = queryfx_one(
+        id(new PhabricatorRepository())->establishConnection('r'),
+        'SELECT * FROM %T WHERE fullCommitName = %s',
+        PhabricatorRepository::TABLE_BADCOMMIT,
+        'r'.$callsign.$commit->getCommitIdentifier());
+    }
+
+    if ($bad_commit) {
+      $error_panel = new AphrontErrorView();
+      $error_panel->setWidth(AphrontErrorView::WIDTH_WIDE);
+      $error_panel->setTitle('Bad Commit');
+      $error_panel->appendChild(
+        phutil_escape_html($bad_commit['description']));
+
+      $content[] = $error_panel;
+    } else if ($is_foreign) {
+      // Don't render anything else.
+    } else if (!count($changes)) {
+      $no_changes = new AphrontErrorView();
+      $no_changes->setWidth(AphrontErrorView::WIDTH_WIDE);
+      $no_changes->setSeverity(AphrontErrorView::SEVERITY_WARNING);
+      $no_changes->setTitle('Not Yet Parsed');
+      // TODO: This can also happen with weird SVN changes that don't do
+      // anything (or only alter properties?), although the real no-changes case
+      // is extremely rare and might be impossible to produce organically. We
+      // should probably write some kind of "Nothing Happened!" change into the
+      // DB once we parse these changes so we can distinguish between
+      // "not parsed yet" and "no changes".
+      $no_changes->appendChild(
+        "This commit hasn't been fully parsed yet (or doesn't affect any ".
+        "paths).");
+      $content[] = $no_changes;
+    } else {
+      $change_panel = new AphrontPanelView();
+      $change_panel->setHeader("Changes (".number_format($count).")");
+
+      if ($count !== $original_changes_count) {
+        $show_all_button = phutil_render_tag(
+          'a',
+          array(
+            'class'   => 'button green',
+            'href'    => '?show_all=true',
+          ),
+          phutil_escape_html('Show All Changes'));
+        $warning_view = id(new AphrontErrorView())
+          ->setSeverity(AphrontErrorView::SEVERITY_WARNING)
+          ->setTitle(sprintf(
+                       "Showing only the first %d changes out of %s!",
+                       self::CHANGES_LIMIT,
+                       number_format($original_changes_count)));
+
+        $change_panel->appendChild($warning_view);
+        $change_panel->addButton($show_all_button);
+      }
+
+      $change_panel->appendChild($change_table);
+
+      $content[] = $change_panel;
+
+      $changesets = DiffusionPathChange::convertToDifferentialChangesets(
+        $changes);
+
+      $vcs = $repository->getVersionControlSystem();
+      switch ($vcs) {
+        case PhabricatorRepositoryType::REPOSITORY_TYPE_SVN:
+          $vcs_supports_directory_changes = true;
+          break;
+        case PhabricatorRepositoryType::REPOSITORY_TYPE_GIT:
+        case PhabricatorRepositoryType::REPOSITORY_TYPE_MERCURIAL:
+          $vcs_supports_directory_changes = false;
+          break;
+        default:
+          throw new Exception("Unknown VCS.");
+      }
+
+      $references = array();
+      foreach ($changesets as $key => $changeset) {
+        $file_type = $changeset->getFileType();
+        if ($file_type == DifferentialChangeType::FILE_DIRECTORY) {
+          if (!$vcs_supports_directory_changes) {
+            unset($changesets[$key]);
+            continue;
+          }
+        }
+
+        $references[$key] = $drequest->generateURI(
+          array(
+            'action' => 'rendering-ref',
+            'path'   => $changeset->getFilename(),
+          ));
+      }
+
+      // TODO: Some parts of the views still rely on properties of the
+      // DifferentialChangeset. Make the objects ephemeral to make sure we don't
+      // accidentally save them, and then set their ID to the appropriate ID for
+      // this application (the path IDs).
+      $pquery = new DiffusionPathIDQuery(mpull($changesets, 'getFilename'));
+      $path_ids = $pquery->loadPathIDs();
+      foreach ($changesets as $changeset) {
+        $changeset->makeEphemeral();
+        $changeset->setID($path_ids[$changeset->getFilename()]);
+      }
+
+      $change_list = new DifferentialChangesetListView();
+      $change_list->setChangesets($changesets);
+      $change_list->setVisibleChangesets($changesets);
+      $change_list->setRenderingReferences($references);
+      $change_list->setRenderURI('/diffusion/'.$callsign.'/diff/');
+      $change_list->setRepository($repository);
+      $change_list->setUser($user);
+
+      $change_list->setStandaloneURI(
+        '/diffusion/'.$callsign.'/diff/');
+      $change_list->setRawFileURIs(
+        // TODO: Implement this, somewhat tricky if there's an octopus merge
+        // or whatever?
+        null,
+        '/diffusion/'.$callsign.'/diff/?view=r');
+
+      $change_list->setInlineCommentControllerURI(
+        '/diffusion/inline/'.phutil_escape_uri($commit->getPHID()).'/');
+
+      // TODO: This is pretty awkward, unify the CSS between Diffusion and
+      // Differential better.
+      require_celerity_resource('differential-core-view-css');
+      $change_list =
+        '<div class="differential-primary-pane">'.
+          $change_list->render().
+        '</div>';
+
+      $content[] = $change_list;
+    }
 
     return $this->buildStandardPageResponse(
       $content,
