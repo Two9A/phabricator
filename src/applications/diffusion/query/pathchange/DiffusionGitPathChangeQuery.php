@@ -24,7 +24,7 @@ final class DiffusionGitPathChangeQuery extends DiffusionPathChangeQuery {
   protected function executeQuery() {
 
     $drequest = $this->getRequest();
-    $drequest_prev = $this->getPrevRequest();
+    $drequest_prev = $this->getPreviousRequest();
     $repository = $drequest->getRepository();
 
     $commit = $drequest->loadCommit();

@@ -19,7 +19,6 @@
 abstract class DiffusionQuery {
 
   private $request;
-  private $prevRequest;
 
   final protected function __construct() {
     // <protected>
@@ -27,8 +26,7 @@ abstract class DiffusionQuery {
 
   protected static function newQueryObject(
     $base_class,
-    DiffusionRequest $request,
-    DiffusionRequest $prev_request = null) {
+    DiffusionRequest $request) {
 
     $repository = $request->getRepository();
 
@@ -46,17 +44,12 @@ abstract class DiffusionQuery {
     $class = str_replace('Diffusion', 'Diffusion'.$name, $base_class);
     $obj = new $class();
     $obj->request = $request;
-    $obj->prevRequest = $prev_request;
 
     return $obj;
   }
 
   final protected function getRequest() {
     return $this->request;
-  }
-
-  final protected function getPrevRequest() {
-    return $this->prevRequest;
   }
 
   abstract protected function executeQuery();

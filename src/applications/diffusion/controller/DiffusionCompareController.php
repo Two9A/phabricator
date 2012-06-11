@@ -16,9 +16,7 @@
  * limitations under the License.
  */
 
-final class DiffusionCompareController extends DiffusionController {
-
-  const CHANGES_LIMIT = 100;
+final class DiffusionCompareController extends DiffusionCommitController {
 
   private $diffusionRequestPrev = null;
 
@@ -92,35 +90,16 @@ final class DiffusionCompareController extends DiffusionController {
     $is_foreign = $commit_data->getCommitDetail('foreign-svn-stub');
     $prev_is_foreign = $commit_prev_data->getCommitDetail('foreign-svn-stub');
     if ($is_foreign || $prev_is_foreign) {
-      $subpath = $commit_data->getCommitDetail('svn-subpath');
-      $prev_subpath = $commit_prev_data->getCommitDetail('svn-subpath');
-
-      if ($prev_subpath && ($prev_subpath != $subpath)) {
-        $subpath = $prev_subpath;
-      }
-
-      $error_panel = new AphrontErrorView();
-      $error_panel->setWidth(AphrontErrorView::WIDTH_WIDE);
-      $error_panel->setTitle('Commit Not Tracked');
-      $error_panel->setSeverity(AphrontErrorView::SEVERITY_WARNING);
-      $error_panel->appendChild(
-        "This Diffusion repository is configured to track only one ".
-        "subdirectory of the entire Subversion repository, and this commit ".
-        "didn't affect the tracked subdirectory ('".
-        phutil_escape_html($subpath)."'), so no information is available.");
-      $content[] = $error_panel;
+      // TODO: SVN subpaths
     } else {
-      $engine = PhabricatorMarkupEngine::newDifferentialMarkupEngine();
-
       require_celerity_resource('diffusion-commit-view-css');
-      require_celerity_resource('phabricator-remarkup-css');
 
       $headsup_panel = new AphrontHeadsupView();
       $headsup_panel->setHeader('Comparison Detail');
       $headsup_panel->setActionList(
         $this->renderHeadsupActionList($commit));
       $headsup_panel->setProperties(
-        $this->getCommitProperties(
+        $this->getCommitPropertiesByPrevious(
           $commit,
           $commit_data,
           $commit_prev));
@@ -128,13 +107,9 @@ final class DiffusionCompareController extends DiffusionController {
       $content[] = $headsup_panel;
     }
 
-    // TODO: Work out a PathChangeQuery across all the commits
-    // between commit and commit_prev. For now, display nothing.
     $change_query = DiffusionPathChangeQuery::newFromDiffusionRequest(
       $drequest, $drequest_prev);
     $changes = $change_query->loadChanges();
-
-    //$content[] = $this->buildMergesTable($commit);
 
     $original_changes_count = count($changes);
     if ($request->getStr('show_all') !== 'true' &&
@@ -142,22 +117,26 @@ final class DiffusionCompareController extends DiffusionController {
       $changes = array_slice($changes, 0, self::CHANGES_LIMIT);
     }
 
-    $change_table = new DiffusionCommitChangeTableView();
-    $change_table->setDiffusionRequest($drequest);
-    $change_table->setPathChanges($changes);
-
     $count = count($changes);
 
     $bad_commit = null;
+    $bad_commit_prev = null;
     if ($count == 0) {
+      $repo_connection = id(new PhabricatorRepository())
+      	->establishConnection('r');
       $bad_commit = queryfx_one(
-        id(new PhabricatorRepository())->establishConnection('r'),
+        $repo_connection,
         'SELECT * FROM %T WHERE fullCommitName = %s',
         PhabricatorRepository::TABLE_BADCOMMIT,
         'r'.$callsign.$commit->getCommitIdentifier());
+      $bad_commit_prev = queryfx_one(
+        $repo_connection,
+        'SELECT * FROM %T WHERE fullCommitName = %s',
+        PhabricatorRepository::TABLE_BADCOMMIT,
+        'r'.$callsign.$commit_prev->getCommitIdentifier());
     }
 
-    if ($bad_commit) {
+    if ($bad_commit || $bad_commit_prev) {
       $error_panel = new AphrontErrorView();
       $error_panel->setWidth(AphrontErrorView::WIDTH_WIDE);
       $error_panel->setTitle('Bad Commit');
@@ -165,9 +144,9 @@ final class DiffusionCompareController extends DiffusionController {
         phutil_escape_html($bad_commit['description']));
 
       $content[] = $error_panel;
-    } else if ($is_foreign) {
+    } else if ($is_foreign || $prev_is_foreign) {
       // Don't render anything else.
-    } else if (!count($changes)) {
+    } else if (!$count) {
       $no_changes = new AphrontErrorView();
       $no_changes->setWidth(AphrontErrorView::WIDTH_WIDE);
       $no_changes->setSeverity(AphrontErrorView::SEVERITY_WARNING);
@@ -183,104 +162,8 @@ final class DiffusionCompareController extends DiffusionController {
         "paths).");
       $content[] = $no_changes;
     } else {
-      $change_panel = new AphrontPanelView();
-      $change_panel->setHeader("Changes (".number_format($count).")");
-
-      if ($count !== $original_changes_count) {
-        $show_all_button = phutil_render_tag(
-          'a',
-          array(
-            'class'   => 'button green',
-            'href'    => '?show_all=true',
-          ),
-          phutil_escape_html('Show All Changes'));
-        $warning_view = id(new AphrontErrorView())
-          ->setSeverity(AphrontErrorView::SEVERITY_WARNING)
-          ->setTitle(sprintf(
-                       "Showing only the first %d changes out of %s!",
-                       self::CHANGES_LIMIT,
-                       number_format($original_changes_count)));
-
-        $change_panel->appendChild($warning_view);
-        $change_panel->addButton($show_all_button);
-      }
-
-      $change_panel->appendChild($change_table);
-
-      $content[] = $change_panel;
-
-      $changesets = DiffusionPathChange::convertToDifferentialChangesets(
-        $changes);
-
-      $vcs = $repository->getVersionControlSystem();
-      switch ($vcs) {
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_SVN:
-          $vcs_supports_directory_changes = true;
-          break;
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_GIT:
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_MERCURIAL:
-          $vcs_supports_directory_changes = false;
-          break;
-        default:
-          throw new Exception("Unknown VCS.");
-      }
-
-      $references = array();
-      foreach ($changesets as $key => $changeset) {
-        $file_type = $changeset->getFileType();
-        if ($file_type == DifferentialChangeType::FILE_DIRECTORY) {
-          if (!$vcs_supports_directory_changes) {
-            unset($changesets[$key]);
-            continue;
-          }
-        }
-
-        $references[$key] = $drequest->generateURI(
-          array(
-            'action' => 'rendering-ref',
-            'path'   => $changeset->getFilename(),
-          ));
-      }
-
-      // TODO: Some parts of the views still rely on properties of the
-      // DifferentialChangeset. Make the objects ephemeral to make sure we don't
-      // accidentally save them, and then set their ID to the appropriate ID for
-      // this application (the path IDs).
-      $pquery = new DiffusionPathIDQuery(mpull($changesets, 'getFilename'));
-      $path_ids = $pquery->loadPathIDs();
-      foreach ($changesets as $changeset) {
-        $changeset->makeEphemeral();
-        $changeset->setID($path_ids[$changeset->getFilename()]);
-      }
-
-      $change_list = new DifferentialChangesetListView();
-      $change_list->setChangesets($changesets);
-      $change_list->setVisibleChangesets($changesets);
-      $change_list->setRenderingReferences($references);
-      $change_list->setRenderURI('/diffusion/'.$callsign.'/diff/');
-      $change_list->setRepository($repository);
-      $change_list->setUser($user);
-
-      $change_list->setStandaloneURI(
-        '/diffusion/'.$callsign.'/diff/');
-      $change_list->setRawFileURIs(
-        // TODO: Implement this, somewhat tricky if there's an octopus merge
-        // or whatever?
-        null,
-        '/diffusion/'.$callsign.'/diff/?view=r');
-
-      $change_list->setInlineCommentControllerURI(
-        '/diffusion/inline/'.phutil_escape_uri($commit->getPHID()).'/');
-
-      // TODO: This is pretty awkward, unify the CSS between Diffusion and
-      // Differential better.
-      require_celerity_resource('differential-core-view-css');
-      $change_list =
-        '<div class="differential-primary-pane">'.
-          $change_list->render().
-        '</div>';
-
-      $content[] = $change_list;
+      $content = array_merge($content,
+        $this->buildChangeList($changes, $original_changes_count));
     }
 
     return $this->buildStandardPageResponse(
@@ -291,17 +174,13 @@ final class DiffusionCompareController extends DiffusionController {
       ));
   }
 
-  private function getCommitProperties(
+  protected function getCommitPropertiesByPrevious(
     PhabricatorRepositoryCommit $commit,
     PhabricatorRepositoryCommitData $data,
     PhabricatorRepositoryCommit $previous) {
     $user = $this->getRequest()->getUser();
 
-    $task_phids = PhabricatorEdgeQuery::loadDestinationPHIDs(
-      $commit->getPHID(),
-      PhabricatorEdgeConfig::TYPE_COMMIT_HAS_TASK);
-
-    $phids = $task_phids;
+    $phids = array();
     if ($data->getCommitDetail('authorPHID')) {
       $phids[] = $data->getCommitDetail('authorPHID');
     }
@@ -330,7 +209,6 @@ final class DiffusionCompareController extends DiffusionController {
       $props['Diff Against'] = $handles[$previous->getPHID()]->renderLink();
     }
 
-
     $request = $this->getDiffusionRequest();
 
     $contains = DiffusionContainsQuery::newFromDiffusionRequest($request);
@@ -343,15 +221,10 @@ final class DiffusionCompareController extends DiffusionController {
       $props['Branches'] = $branches;
     }
 
-    $refs = $this->buildRefs($request);
-    if ($refs) {
-      $props['Refs'] = $refs;
-    }
-
     return $props;
   }
 
-  private function renderHeadsupActionList(
+  protected function renderHeadsupActionList(
     PhabricatorRepositoryCommit $commit) {
 
     $request = $this->getRequest();
@@ -368,55 +241,6 @@ final class DiffusionCompareController extends DiffusionController {
     $action_list->setActions($actions);
 
     return $action_list;
-  }
-
-  private function buildRefs(DiffusionRequest $request) {
-    // Not turning this into a proper Query class since it's pretty simple,
-    // one-off, and Git-specific.
-
-    $type_git = PhabricatorRepositoryType::REPOSITORY_TYPE_GIT;
-
-    $repository = $request->getRepository();
-    if ($repository->getVersionControlSystem() != $type_git) {
-      return null;
-    }
-
-    list($stdout) = $repository->execxLocalCommand(
-      'log --format=%s -n 1 %s --',
-      '%d',
-      $request->getCommit());
-
-    return trim($stdout, "() \n");
-  }
-
-  private function buildRawDiffResponse(
-    DiffusionRequest $drequest,
-    DiffusionRequest $drequest_prev) {
-
-    $raw_query = DiffusionRawDiffQuery::newFromDiffusionRequest(
-      $drequest,
-      $drequest_prev);
-    $raw_diff  = $raw_query->loadRawDiff();
-
-    $hash = PhabricatorHash::digest($raw_diff);
-
-    $file = id(new PhabricatorFile())->loadOneWhere(
-      'contentHash = %s LIMIT 1',
-      $hash);
-    if (!$file) {
-      // We're just caching the data; this is always safe.
-      $unguarded = AphrontWriteGuard::beginScopedUnguardedWrites();
-
-      $file = PhabricatorFile::newFromFileData(
-        $raw_diff,
-        array(
-          'name' => $drequest->getCommit().'.diff',
-        ));
-
-      unset($unguarded);
-    }
-
-    return id(new AphrontRedirectResponse())->setURI($file->getBestURI());
   }
 
 }

@@ -26,11 +26,20 @@ abstract class DiffusionRawDiffQuery extends DiffusionQuery {
   final public static function newFromDiffusionRequest(
     DiffusionRequest $request,
     DiffusionRequest $prev_request = null) {
-    return parent::newQueryObject(__CLASS__, $request, $prev_request);
+    return parent::newQueryObject(__CLASS__, $request);
+    $this->setPreviousRequest($prev_request);
   }
 
   final public function loadRawDiff() {
     return $this->executeQuery();
+  }
+
+  final public function getPreviousRequest() {
+    return $this->prevRequest;
+  }
+
+  final public function setPreviousRequest($prev_request) {
+    $this->prevRequest = $prev_request;
   }
 
   final public function setTimeout($timeout) {

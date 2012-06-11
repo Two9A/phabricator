@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-final class DiffusionCommitController extends DiffusionController {
+class DiffusionCommitController extends DiffusionController {
 
   const CHANGES_LIMIT = 100;
 
@@ -45,7 +45,6 @@ final class DiffusionCommitController extends DiffusionController {
       'commit' => true,
     ));
 
-    $repository = $drequest->getRepository();
     $commit = $drequest->loadCommit();
 
     if (!$commit) {
@@ -84,7 +83,7 @@ final class DiffusionCommitController extends DiffusionController {
       $headsup_panel->setActionList(
         $this->renderHeadsupActionList($commit));
       $headsup_panel->setProperties(
-        $this->getCommitProperties(
+        $this->getCommitPropertiesByParents(
           $commit,
           $commit_data,
           $parent_query->loadParents()));
@@ -119,10 +118,6 @@ final class DiffusionCommitController extends DiffusionController {
       $changes = array_slice($changes, 0, self::CHANGES_LIMIT);
     }
 
-    $change_table = new DiffusionCommitChangeTableView();
-    $change_table->setDiffusionRequest($drequest);
-    $change_table->setPathChanges($changes);
-
     $count = count($changes);
 
     $bad_commit = null;
@@ -144,7 +139,7 @@ final class DiffusionCommitController extends DiffusionController {
       $content[] = $error_panel;
     } else if ($is_foreign) {
       // Don't render anything else.
-    } else if (!count($changes)) {
+    } else if (!$count) {
       $no_changes = new AphrontErrorView();
       $no_changes->setWidth(AphrontErrorView::WIDTH_WIDE);
       $no_changes->setSeverity(AphrontErrorView::SEVERITY_WARNING);
@@ -160,104 +155,9 @@ final class DiffusionCommitController extends DiffusionController {
         "paths).");
       $content[] = $no_changes;
     } else {
-      $change_panel = new AphrontPanelView();
-      $change_panel->setHeader("Changes (".number_format($count).")");
-
-      if ($count !== $original_changes_count) {
-        $show_all_button = phutil_render_tag(
-          'a',
-          array(
-            'class'   => 'button green',
-            'href'    => '?show_all=true',
-          ),
-          phutil_escape_html('Show All Changes'));
-        $warning_view = id(new AphrontErrorView())
-          ->setSeverity(AphrontErrorView::SEVERITY_WARNING)
-          ->setTitle(sprintf(
-                       "Showing only the first %d changes out of %s!",
-                       self::CHANGES_LIMIT,
-                       number_format($original_changes_count)));
-
-        $change_panel->appendChild($warning_view);
-        $change_panel->addButton($show_all_button);
-      }
-
-      $change_panel->appendChild($change_table);
-
-      $content[] = $change_panel;
-
-      $changesets = DiffusionPathChange::convertToDifferentialChangesets(
-        $changes);
-
-      $vcs = $repository->getVersionControlSystem();
-      switch ($vcs) {
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_SVN:
-          $vcs_supports_directory_changes = true;
-          break;
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_GIT:
-        case PhabricatorRepositoryType::REPOSITORY_TYPE_MERCURIAL:
-          $vcs_supports_directory_changes = false;
-          break;
-        default:
-          throw new Exception("Unknown VCS.");
-      }
-
-      $references = array();
-      foreach ($changesets as $key => $changeset) {
-        $file_type = $changeset->getFileType();
-        if ($file_type == DifferentialChangeType::FILE_DIRECTORY) {
-          if (!$vcs_supports_directory_changes) {
-            unset($changesets[$key]);
-            continue;
-          }
-        }
-
-        $references[$key] = $drequest->generateURI(
-          array(
-            'action' => 'rendering-ref',
-            'path'   => $changeset->getFilename(),
-          ));
-      }
-
-      // TODO: Some parts of the views still rely on properties of the
-      // DifferentialChangeset. Make the objects ephemeral to make sure we don't
-      // accidentally save them, and then set their ID to the appropriate ID for
-      // this application (the path IDs).
-      $pquery = new DiffusionPathIDQuery(mpull($changesets, 'getFilename'));
-      $path_ids = $pquery->loadPathIDs();
-      foreach ($changesets as $changeset) {
-        $changeset->makeEphemeral();
-        $changeset->setID($path_ids[$changeset->getFilename()]);
-      }
-
-      $change_list = new DifferentialChangesetListView();
-      $change_list->setChangesets($changesets);
-      $change_list->setVisibleChangesets($changesets);
-      $change_list->setRenderingReferences($references);
-      $change_list->setRenderURI('/diffusion/'.$callsign.'/diff/');
-      $change_list->setRepository($repository);
-      $change_list->setUser($user);
-
-      $change_list->setStandaloneURI(
-        '/diffusion/'.$callsign.'/diff/');
-      $change_list->setRawFileURIs(
-        // TODO: Implement this, somewhat tricky if there's an octopus merge
-        // or whatever?
-        null,
-        '/diffusion/'.$callsign.'/diff/?view=r');
-
-      $change_list->setInlineCommentControllerURI(
-        '/diffusion/inline/'.phutil_escape_uri($commit->getPHID()).'/');
-
-      // TODO: This is pretty awkward, unify the CSS between Diffusion and
-      // Differential better.
-      require_celerity_resource('differential-core-view-css');
-      $change_list =
-        '<div class="differential-primary-pane">'.
-          $change_list->render().
-        '</div>';
-
-      $content[] = $change_list;
+      $content = array_merge(
+        $content,
+        $this->buildChangeList($changes, $original_changes_count));
     }
 
     $content[] = $this->buildAddCommentView($commit, $audit_requests);
@@ -269,7 +169,7 @@ final class DiffusionCommitController extends DiffusionController {
       ));
   }
 
-  private function getCommitProperties(
+  protected function getCommitPropertiesByParents(
     PhabricatorRepositoryCommit $commit,
     PhabricatorRepositoryCommitData $data,
     array $parents) {
@@ -449,6 +349,124 @@ final class DiffusionCommitController extends DiffusionController {
     $view->setHandles($handles);
 
     return $view;
+  }
+
+  protected function buildChangeList($changes, $original_changes_count) {
+    $request = $this->getRequest();
+    $user = $request->getUser();
+
+    $drequest = $this->diffusionRequest;
+    $repository = $drequest->getRepository();
+    $callsign = $drequest->getRepository()->getCallsign();
+    $commit = $drequest->loadCommit();
+
+    $count = count($changes);
+    $content = array();
+
+    $change_table = new DiffusionCommitChangeTableView();
+    $change_table->setDiffusionRequest($drequest);
+    $change_table->setPathChanges($changes);
+
+    $change_panel = new AphrontPanelView();
+    $change_panel->setHeader("Changes (".number_format($count).")");
+
+    if ($count !== $original_changes_count) {
+      $show_all_button = phutil_render_tag(
+        'a',
+        array(
+          'class'   => 'button green',
+          'href'    => '?show_all=true',
+        ),
+        phutil_escape_html('Show All Changes'));
+      $warning_view = id(new AphrontErrorView())
+        ->setSeverity(AphrontErrorView::SEVERITY_WARNING)
+        ->setTitle(sprintf(
+                     "Showing only the first %d changes out of %s!",
+                     self::CHANGES_LIMIT,
+                     number_format($original_changes_count)));
+
+      $change_panel->appendChild($warning_view);
+      $change_panel->addButton($show_all_button);
+    }
+
+    $change_panel->appendChild($change_table);
+
+    $content[] = $change_panel;
+
+    $changesets = DiffusionPathChange::convertToDifferentialChangesets(
+      $changes);
+
+    $vcs = $repository->getVersionControlSystem();
+    switch ($vcs) {
+      case PhabricatorRepositoryType::REPOSITORY_TYPE_SVN:
+        $vcs_supports_directory_changes = true;
+        break;
+      case PhabricatorRepositoryType::REPOSITORY_TYPE_GIT:
+      case PhabricatorRepositoryType::REPOSITORY_TYPE_MERCURIAL:
+        $vcs_supports_directory_changes = false;
+        break;
+      default:
+        throw new Exception("Unknown VCS.");
+    }
+
+    $references = array();
+    foreach ($changesets as $key => $changeset) {
+      $file_type = $changeset->getFileType();
+      if ($file_type == DifferentialChangeType::FILE_DIRECTORY) {
+        if (!$vcs_supports_directory_changes) {
+          unset($changesets[$key]);
+          continue;
+        }
+      }
+
+      $references[$key] = $drequest->generateURI(
+        array(
+          'action' => 'rendering-ref',
+          'path'   => $changeset->getFilename(),
+        ));
+    }
+
+    // TODO: Some parts of the views still rely on properties of the
+    // DifferentialChangeset. Make the objects ephemeral to make sure we don't
+    // accidentally save them, and then set their ID to the appropriate ID for
+    // this application (the path IDs).
+    $pquery = new DiffusionPathIDQuery(mpull($changesets, 'getFilename'));
+    $path_ids = $pquery->loadPathIDs();
+    foreach ($changesets as $changeset) {
+      $changeset->makeEphemeral();
+      $changeset->setID($path_ids[$changeset->getFilename()]);
+    }
+
+    $change_list = new DifferentialChangesetListView();
+    $change_list->setChangesets($changesets);
+    $change_list->setVisibleChangesets($changesets);
+    $change_list->setRenderingReferences($references);
+    $change_list->setRenderURI('/diffusion/'.$callsign.'/diff/');
+    $change_list->setRepository($repository);
+    $change_list->setUser($user);
+
+    $change_list->setStandaloneURI(
+      '/diffusion/'.$callsign.'/diff/');
+    $change_list->setRawFileURIs(
+      // TODO: Implement this, somewhat tricky if there's an octopus merge
+      // or whatever?
+      null,
+      '/diffusion/'.$callsign.'/diff/?view=r');
+
+    $change_list->setInlineCommentControllerURI(
+      '/diffusion/inline/'.phutil_escape_uri($commit->getPHID()).'/');
+
+    // TODO: This is pretty awkward, unify the CSS between Diffusion and
+    // Differential better.
+    require_celerity_resource('differential-core-view-css');
+    $change_list =
+      '<div class="differential-primary-pane">'.
+        $change_list->render().
+      '</div>';
+
+    $content[] = $change_list;
+
+    return $content;
   }
 
   private function buildAddCommentView(
@@ -694,7 +712,7 @@ final class DiffusionCommitController extends DiffusionController {
     return $panel;
   }
 
-  private function renderHeadsupActionList(
+  protected function renderHeadsupActionList(
     PhabricatorRepositoryCommit $commit) {
 
     $request = $this->getRequest();
@@ -823,8 +841,12 @@ final class DiffusionCommitController extends DiffusionController {
     return trim($stdout, "() \n");
   }
 
-  private function buildRawDiffResponse(DiffusionRequest $drequest) {
-    $raw_query = DiffusionRawDiffQuery::newFromDiffusionRequest($drequest);
+  protected function buildRawDiffResponse(
+    DiffusionRequest $drequest,
+    DiffusionRequest $drequest_prev = null) {
+    $raw_query = DiffusionRawDiffQuery::newFromDiffusionRequest(
+      $drequest,
+      $drequest_prev);
     $raw_diff  = $raw_query->loadRawDiff();
 
     $hash = PhabricatorHash::digest($raw_diff);
