@@ -16,36 +16,41 @@
  * limitations under the License.
  */
 
-abstract class DiffusionPathChangeQuery extends DiffusionQuery {
+final class DiffusionGitPathChangeQuery extends DiffusionPathChangeQuery {
 
   private $request;
   private $prevRequest;
 
-  final public static function newFromDiffusionRequest(
-    DiffusionRequest $request,
-    DiffusionRequest $prev_request = null) {
-    return parent::newQueryObject(__CLASS__, $request);
-    $this->setPreviousRequest($prev_request);
-  }
-
-  final public function loadChanges() {
-    return $this->executeQuery();
-  }
-
-  final public function getPreviousRequest() {
-    return $this->prevRequest;
-  }
-
-  final public function setPreviousRequest($prev_request) {
-    $this->prevRequest = $prev_request;
-  }
-
   protected function executeQuery() {
 
     $drequest = $this->getRequest();
+    $drequest_prev = $this->getPreviousRequest();
     $repository = $drequest->getRepository();
 
     $commit = $drequest->loadCommit();
+    if ($drequest_prev) {
+      $commit_ids = array();
+      $commit_prev = $drequest_prev->loadCommit();
+      $future = $repository->getLocalCommandFuture(
+        'log --format="%%H" %s..%s',
+        $commit_prev->getCommitIdentifier(),
+        $commit->getCommitIdentifier());
+
+      try {
+        list($raw_ids) = $future->resolvex();
+        foreach (explode("\n", $raw_ids) as $id) {
+          if (trim($id)) {
+            $commit_ids[] = $id;
+          }
+        }
+      } catch (CommandException $ex) {
+        throw $ex;
+      }
+
+    }
+    else {
+      $commit_ids = array($commit->getID());
+    }
 
     $raw_changes = queryfx_all(
       $repository->establishConnection('r'),
@@ -55,12 +60,12 @@ abstract class DiffusionPathChangeQuery extends DiffusionQuery {
           LEFT JOIN %T p ON c.pathID = p.id
           LEFT JOIN %T t ON c.targetPathID = t.id
           LEFT JOIN %T i ON c.targetCommitID = i.id
-        WHERE c.commitID = %d AND isDirect = 1',
+        WHERE c.commitID IN (%Ls) AND isDirect = 1',
       PhabricatorRepository::TABLE_PATHCHANGE,
       PhabricatorRepository::TABLE_PATH,
       PhabricatorRepository::TABLE_PATH,
       $commit->getTableName(),
-      $commit->getID());
+      $commit_ids);
 
     $changes = array();
 
@@ -75,7 +80,7 @@ abstract class DiffusionPathChangeQuery extends DiffusionQuery {
       $change->setPath(ltrim($raw_change['pathName'], '/'));
       $change->setChangeType($raw_change['changeType']);
       $change->setFileType($raw_change['fileType']);
-      $change->setCommitIdentifier($commit->getCommitIdentifier());
+      $change->setCommitIdentifier($commit->getID());
 
       $change->setTargetPath(ltrim($raw_change['targetPathName'], '/'));
       $change->setTargetCommitIdentifier($raw_change['targetCommitIdentifier']);
@@ -97,7 +102,7 @@ abstract class DiffusionPathChangeQuery extends DiffusionQuery {
       }
     }
 
-
     return $changes;
   }
+
 }

@@ -20,9 +20,16 @@ final class DiffusionGitRawDiffQuery extends DiffusionRawDiffQuery {
 
   protected function executeQuery() {
     $drequest = $this->getRequest();
+    $drequest_prev = $this->getPreviousRequest();
     $repository = $drequest->getRepository();
 
     $commit = $drequest->getCommit();
+    if ($drequest_prev) {
+      $commit_prev = $drequest_prev->getCommit();
+    }
+    else {
+      $commit_prev = null;
+    }
 
     $options = array(
       '-M',
@@ -38,12 +45,22 @@ final class DiffusionGitRawDiffQuery extends DiffusionRawDiffQuery {
     // If there's no path, get the entire raw diff.
     $path = nonempty($drequest->getPath(), '.');
 
-    $future = $repository->getLocalCommandFuture(
-      "diff %C %s^ %s -- %s",
-      $options,
-      $commit,
-      $commit,
-      $path);
+    if ($commit_prev) {
+      $future = $repository->getLocalCommandFuture(
+        "diff %C %s %s -- %s",
+        $options,
+        $commit_prev,
+        $commit,
+        $path);
+    }
+    else {
+      $future = $repository->getLocalCommandFuture(
+        "diff %C %s^ %s -- %s",
+        $options,
+        $commit,
+        $commit,
+        $path);
+    }
 
     if ($this->getTimeout()) {
       $future->setTimeout($this->getTimeout());
