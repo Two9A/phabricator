@@ -179,6 +179,8 @@ return array(
   // extend AphrontMySQLDatabaseConnectionBase.
   'mysql.implementation' => 'AphrontMySQLDatabaseConnection',
 
+// -- Notifications ----//
+  'notification.enabled' => false,
 
 // -- Email ----------------------------------------------------------------- //
 
@@ -973,8 +975,8 @@ return array(
   // "phd launch <N> taskmaster".
   'phd.start-taskmasters' => 4,
 
-  // Path to custom celerity resource map. Absolute or relative to
-  // 'phabricator/src'. See also `scripts/celerity_mapper.php`.
+  // Path to custom celerity resource map relative to 'phabricator/src'.
+  // See also `scripts/celerity_mapper.php`.
   'celerity.resource-path' => '__celerity_resource_map__.php',
 
   // This value is an input to the hash function when building resource hashes.

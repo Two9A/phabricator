@@ -16,23 +16,6 @@
  * limitations under the License.
  */
 
-final class DifferentialCCWelcomeMail extends DifferentialReviewRequestMail {
+abstract class PhabricatorNotificationView extends AphrontView {
 
-  protected function renderVarySubject() {
-    return '[Added to CC] '.$this->renderSubject();
-  }
-
-  protected function renderBody() {
-
-    $actor = $this->getActorName();
-    $name  = $this->getRevision()->getTitle();
-    $body = array();
-
-    $body[] = "{$actor} added you to the CC list for the revision \"{$name}\".";
-    $body[] = null;
-
-    $body[] = $this->renderReviewRequestBody();
-
-    return implode("\n", $body);
-  }
 }

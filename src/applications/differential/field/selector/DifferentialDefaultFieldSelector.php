@@ -37,8 +37,8 @@ final class DifferentialDefaultFieldSelector
         new DifferentialReviewersFieldSpecification(),
         new DifferentialReviewedByFieldSpecification(),
         new DifferentialCCsFieldSpecification(),
-        new DifferentialUnitFieldSpecification(),
         new DifferentialLintFieldSpecification(),
+        new DifferentialUnitFieldSpecification(),
         new DifferentialCommitsFieldSpecification(),
         new DifferentialDependenciesFieldSpecification(),
         new DifferentialManiphestTasksFieldSpecification(),
@@ -105,6 +105,7 @@ final class DifferentialDefaultFieldSelector
         'DifferentialRevisionIDFieldSpecification',
         'DifferentialManiphestTasksFieldSpecification',
         'DifferentialBranchFieldSpecification',
+        'DifferentialArcanistProjectFieldSpecification',
         'DifferentialCommitsFieldSpecification',
       )) + $map;
 

@@ -19,7 +19,7 @@
 abstract class PhabricatorFeedStory {
 
   private $data;
-
+  private $hasViewed;
   private $handles;
   private $framed;
 
@@ -29,8 +29,23 @@ abstract class PhabricatorFeedStory {
 
   abstract public function renderView();
 
+//  TODO: Make abstract once all subclasses implement it.
+  public function renderNotificationView() {
+    return id(new PhabricatorFeedStoryUnknown($this->data))
+      ->renderNotificationView();
+  }
+
   public function getRequiredHandlePHIDs() {
     return array();
+  }
+
+  public function setHasViewed($has_viewed) {
+    $this->hasViewed = $has_viewed;
+    return $this;
+  }
+
+  public function getHasViewed() {
+    return $this->hasViewed;
   }
 
   public function getRequiredObjectPHIDs() {

@@ -16,23 +16,22 @@
  * limitations under the License.
  */
 
-final class DifferentialCCWelcomeMail extends DifferentialReviewRequestMail {
+abstract class PhabricatorNotificationController
+  extends PhabricatorController {
 
-  protected function renderVarySubject() {
-    return '[Added to CC] '.$this->renderSubject();
+  public function buildStandardPageResponse($view, array $data) {
+
+    $page = $this->buildStandardPageView();
+
+    $page->setApplicationName('Notification');
+    $page->setBaseURI('/notification/');
+    $page->setTitle(idx($data, 'title'));
+    $page->setGlyph('!');
+    $page->appendChild($view);
+
+    $response = new AphrontWebpageResponse();
+    return $response->setContent($page->render());
+
   }
 
-  protected function renderBody() {
-
-    $actor = $this->getActorName();
-    $name  = $this->getRevision()->getTitle();
-    $body = array();
-
-    $body[] = "{$actor} added you to the CC list for the revision \"{$name}\".";
-    $body[] = null;
-
-    $body[] = $this->renderReviewRequestBody();
-
-    return implode("\n", $body);
-  }
 }
